@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import NaturalLanguage
 import Observation
+import Translation
 
 /// Central manager for intercepting live macOS media playback (Apple Music, Spotify, and system-wide Now Playing)
 /// via a best-effort MediaRemote helper subprocess + DistributedNotificationCenter, automatically fetching high-res
@@ -22,7 +24,7 @@ public final class MediaPlaybackManager {
     }
 
     /// Whether English lyric translation is fetched and shown beneath the original lyrics (Off by default).
-    /// Lyric text is only sent to the translation service while this is enabled.
+    /// Translation runs on-device (macOS 26+) using installed language packs; no lyric text leaves the Mac.
     public var isTranslationEnabled: Bool = (UserDefaults.standard.object(forKey: MediaPlaybackManager.translationDefaultsKey) as? Bool) ?? false {
         didSet {
             UserDefaults.standard.set(isTranslationEnabled, forKey: Self.translationDefaultsKey)
@@ -767,7 +769,7 @@ public final class MediaPlaybackManager {
         broadcast()
     }
     
-    /// Batch-translates non-English lyric lines into English (`tl=en`) and attaches them as `translation`.
+    /// Translates non-English lyric lines into English on-device and attaches them as `translation`.
     private nonisolated static func translateLyricsToEnglish(_ lines: [LyricLine]) async -> [LyricLine] {
         guard !lines.isEmpty else { return lines }
         // If most lines already carry an embedded LRC translation, keep them as-is
@@ -784,63 +786,43 @@ public final class MediaPlaybackManager {
         }
         guard !translatableIndices.isEmpty else { return updated }
         
-        let batchSize = 28
-        for batchStart in stride(from: 0, to: translatableIndices.count, by: batchSize) {
-            let batchEnd = min(batchStart + batchSize, translatableIndices.count)
-            let chunkIndices = Array(translatableIndices[batchStart..<batchEnd])
-            let joinedText = chunkIndices.map { updated[$0].text }.joined(separator: "\n")
-            
-            guard var components = URLComponents(string: "https://clients5.google.com/translate_a/t") else {
-                continue
-            }
-            components.queryItems = [
-                URLQueryItem(name: "client", value: "dict-chrome-ex"),
-                URLQueryItem(name: "sl", value: "auto"),
-                URLQueryItem(name: "tl", value: "en"),
-                URLQueryItem(name: "q", value: joinedText)
-            ]
-            guard let url = components.url else { continue }
-            
-            var request = URLRequest(url: url)
-            request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 5.0
-            
-            do {
-                let (data, _) = try await URLSession.shared.data(for: request)
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [Any],
-                      let first = json.first else {
+        // On-device Apple Translation (macOS 26+): nothing leaves the Mac. Only uses language packs the
+        // user has already installed (System Settings → General → Language & Region → Translation Languages);
+        // otherwise lines stay untranslated.
+        guard #available(macOS 26.0, *) else { return updated }
+        
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(translatableIndices.map { updated[$0].text }.joined(separator: "\n"))
+        guard let dominant = recognizer.dominantLanguage,
+              dominant != .english,
+              dominant != .undetermined else {
+            return updated
+        }
+        let source = Locale.Language(identifier: dominant.rawValue)
+        let target = Locale.Language(identifier: "en")
+        
+        guard await LanguageAvailability().status(from: source, to: target) == .installed else {
+            return updated
+        }
+        
+        let session = TranslationSession(installedSource: source, target: target)
+        let requests = translatableIndices.map { idx in
+            TranslationSession.Request(sourceText: updated[idx].text, clientIdentifier: String(idx))
+        }
+        
+        do {
+            for response in try await session.translations(from: requests) {
+                guard let id = response.clientIdentifier, let lineIdx = Int(id), updated.indices.contains(lineIdx) else {
                     continue
                 }
-                
-                var translatedBlock: String?
-                var detectedLang: String?
-                if let pair = first as? [Any], let str = pair.first as? String {
-                    translatedBlock = str
-                    if pair.count > 1, let lang = pair[1] as? String {
-                        detectedLang = lang
-                    }
-                } else if let str = first as? String {
-                    translatedBlock = str
+                let candidate = response.targetText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let original = updated[lineIdx].text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty && candidate.caseInsensitiveCompare(original) != .orderedSame {
+                    updated[lineIdx].translation = candidate
                 }
-                
-                // Skip if source language is already English
-                if let lang = detectedLang?.lowercased(), lang == "en" {
-                    continue
-                }
-                
-                if let block = translatedBlock {
-                    let translatedLines = block.components(separatedBy: "\n")
-                    for (offset, lineIdx) in chunkIndices.enumerated() where offset < translatedLines.count {
-                        let candidate = translatedLines[offset].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let original = updated[lineIdx].text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !candidate.isEmpty && candidate.caseInsensitiveCompare(original) != .orderedSame {
-                            updated[lineIdx].translation = candidate
-                        }
-                    }
-                }
-            } catch {
-                continue
             }
+        } catch {
+            return lines
         }
         
         return updated

@@ -17,6 +17,9 @@ For the detailed 6-phase engineering roadmap and checklist, see [PLAN.md](PLAN.m
 - **Launch at Login:** Uses modern macOS Ventura+ `SMAppService.mainApp` API.
 - **Spaces & Fullscreen Auxiliary:** Stays anchored across virtual desktops, floating seamlessly over full-screen apps and Mission Control.
 - **Outside-Click Dismissal:** Clicking outside the expanded tray smoothly collapses it back to resting idle.
+- **Now Playing:** Album art and a live visualizer flank the notch for Apple Music, Spotify, and other players. Click to open a full player with scrubbing, transport controls, and time-synced lyrics from [LRCLIB](https://lrclib.net) (track title and artist are sent to LRCLIB and the iTunes Search API for lyrics and artwork).
+- **On-Device Lyric Translation:** Optional English translations of non-English lyrics using Apple's Translation framework (macOS 26+). Nothing leaves your Mac. Download the source language under *System Settings → General → Language & Region → Translation Languages*.
+- **Agent & Shell Integrations:** Live activities for long-running zsh commands and Claude Code sessions (see [Integrations](#integrations-optional)).
 
 ---
 
@@ -210,7 +213,10 @@ Click the capsule icon in your macOS menu bar to access controls:
 | **Simulate GitHub** | `Cmd + 2` | Triggers a simulated GitHub pull request alert |
 | **Simulate Calendar** | `Cmd + 3` | Triggers a simulated calendar meeting alert |
 | **Simulate Live Task** | `Cmd + 4` | Triggers a 5-second animated CLI progress activity |
+| **Simulate Now Playing** | `Cmd + 5` | Starts a demo track in the media player |
 | **Simulate Queue Burst** | `Cmd + B` | Enqueues 3 rapid notifications to demonstrate FIFO queueing |
+| **Toggle Media Player** | `Cmd + P` | Opens or closes the expanded Now Playing player |
+| **Lyric Translation** | `Cmd + E` | Shows English translations under non-English lyrics |
 | **Toggle Tray** | `Cmd + T` | Expands or collapses the notification tray |
 | **Collapse to Idle** | `Cmd + I` | Snaps all islands back to resting idle state |
 | **Clear All** | `Cmd + K` | Clears all unread notifications from the store |
@@ -227,6 +233,10 @@ DynamicNotch/
 ├── build_app.sh                                       // Release bundler script
 ├── PLAN.md                                            // Architecture plan & implementation checklist
 ├── README.md                                          // This documentation guide
+├── LICENSE                                            // MIT
+├── scripts/
+│   ├── dynamic-notch-zsh-hook.sh                      // zsh preexec/precmd hook for long-running commands
+│   └── claude-notch-hook.sh                           // Claude Code hook bridge (prompt → tools → finish)
 └── Sources/
     └── DynamicNotch/
         ├── App/
@@ -243,22 +253,26 @@ DynamicNotch/
         │   ├── ScreenGeometry.swift                   // Geometry model & corner radii
         │   ├── NotchViewModel.swift                   // Observable presentation state coordinator
         │   ├── NotificationItem.swift                 // Strongly typed notification model
-        │   └── LiveActivityItem.swift                 // Live task progress, duration, and status model
+        │   ├── LiveActivityItem.swift                 // Live task progress, duration, and status model
+        │   └── MediaItem.swift                        // Now Playing track, artwork, and time-synced LRC lyrics
         ├── Pipeline/
         │   ├── NotificationManager.swift              // Multi-window reactive store & FIFO alert queue
         │   ├── LiveActivityManager.swift              // Active task lifecycle coordinator & alert bridge
         │   ├── MockNotificationEmitter.swift          // Presets (Slack, GitHub, Calendar) & burst tester
         │   ├── LocalNotificationServer.swift          // DistributedNotificationCenter IPC for CLI triggers
-        │   └── SystemNotificationObserver.swift       // Real macOS Accessibility AXObserver notification intake
+        │   ├── SystemNotificationObserver.swift       // Real macOS Accessibility AXObserver notification intake
+        │   └── MediaPlaybackManager.swift             // Now Playing intake, transport controls, artwork & lyrics lookup
         └── Views/
             ├── DynamicNotchRootView.swift             // Fluid visual capsule shell & interactive tray
             ├── GeometryDiagnosticsView.swift          // Live screen geometry HUD
             ├── PreferencesView.swift                  // Tabbed Settings interface
             ├── PreferencesWindowController.swift      // Standalone Settings window controller
             └── Components/
+                ├── NotchDesignSystem.swift            // Shared tokens, motion, haptics & reusable controls
                 ├── AlertBannerView.swift              // Incoming alert pill stretch layout
-                ├── LiveActivityPillView.swift         // Animated task spinner, timer, and progress HUD
-                └── TrayNotificationRow.swift          // Interactive notification card with actions
+                ├── LiveActivityPillView.swift         // Progress ring, timer, and task HUD
+                ├── MediaPlayerView.swift              // Compact Now Playing pill & expanded player with lyrics
+                └── TrayNotificationRow.swift          // Swipeable notification card with actions
 ```
 
 ---

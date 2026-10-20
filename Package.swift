@@ -15,7 +15,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "DynamicNotch",
-            path: "Sources/DynamicNotch"
+            path: "Sources/DynamicNotch",
+            linkerSettings: [
+                // Translation.framework ships with macOS 15+; weak-link it so the app still launches on macOS 14.
+                .unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "Translation"])
+            ]
         )
     ]
 )
