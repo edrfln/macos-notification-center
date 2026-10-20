@@ -273,7 +273,7 @@ DynamicNotch/
     └── DynamicNotch/
         ├── App/
         │   ├── AppDelegate.swift                      // Stealth agent lifecycle & status item
-        │   └── main.swift                             // Concurrency entrypoint, CLI runner & dispatcher
+        │   └── DynamicNotchLauncher.swift             // @main entrypoint, CLI runner & dispatcher
         ├── Core/
         │   ├── NotchPanel.swift                       // Non-activating NSPanel with Spaces behaviors
         │   ├── ScreenGeometryManager.swift            // Display discovery & hardware notch cutout math
