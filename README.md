@@ -25,35 +25,42 @@ For the detailed 6-phase engineering roadmap and checklist, see [PLAN.md](PLAN.m
 
 ## Installation
 
-### Requirements
+Requires macOS 14 Sonoma or later (Apple Silicon or Intel).
 
-- macOS 14 Sonoma or later (Apple Silicon or Intel)
-- Xcode Command Line Tools (Swift 5.9+). Install with `xcode-select --install` if `swift --version` fails.
+### Option A: Download (recommended)
 
-### 1. Clone and build
+1. Download the latest **DynamicNotch-x.y.z.zip** from [Releases](https://github.com/edrfln/macos-notification-center/releases/latest), unzip it, and move **DynamicNotch.app** to **Applications**.
+2. Open it. macOS shows *"Apple could not verify DynamicNotch is free of malware"*. Click **Done**.
+3. Open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to DynamicNotch, and confirm.
 
-Clone somewhere permanent, since the optional shell and Claude Code hooks run scripts from this folder.
+You only need to do this once per download. Or skip steps 2–3 from Terminal:
 
 ```bash
-gh repo clone edrfln/macos-notification-center ~/Developer/macos-notification-center
-cd ~/Developer/macos-notification-center
-
-./build_app.sh   # release build → ./DynamicNotch.app (ad-hoc signed)
+xattr -dr com.apple.quarantine /Applications/DynamicNotch.app && open /Applications/DynamicNotch.app
 ```
 
-### 2. Install the app
+> **Why the warning?** Dynamic Notch is free and open source, and isn't notarized through Apple's paid Developer Program. The build is produced by the [Release workflow](.github/workflows/release.yml) straight from this repository's source. Each zip has a `.sha256` checksum next to it on the Releases page if you want to verify your download.
+
+### Option B: Build from source
+
+Requires Xcode 26 or later, or the matching Command Line Tools (`xcode-select --install`).
 
 ```bash
+gh repo clone edrfln/macos-notification-center
+cd macos-notification-center
+
+./build_app.sh                 # → ./DynamicNotch.app (UNIVERSAL=1 for an Apple Silicon + Intel build)
 cp -R DynamicNotch.app /Applications/
 open /Applications/DynamicNotch.app
 ```
 
+### After installing
+
 Dynamic Notch runs as a menu bar agent: there is no Dock icon. Look for the capsule icon in the menu bar.
 
-> If you copied the app from another Mac rather than building it yourself, clear the download quarantine first:
-> `xattr -dr com.apple.quarantine /Applications/DynamicNotch.app`
+> **Now Playing for every app:** Apple Music and Spotify work out of the box. Other players (browsers, Podcasts…) go through a small helper that needs the Xcode Command Line Tools: `xcode-select --install`.
 
-### 3. Grant permissions
+### Grant permissions
 
 | Permission | When it's asked | Why |
 | :--- | :--- | :--- |
@@ -62,13 +69,13 @@ Dynamic Notch runs as a menu bar agent: there is no Dock icon. Look for the caps
 
 The app works without these permissions: mock alerts, CLI alerts and live activities still appear, but real system notifications don't.
 
-> **After every rebuild**, macOS treats the ad-hoc–signed app as a new app. If system notifications stop showing up, remove **DynamicNotch** from the Accessibility list with the **–** button, add it again, and relaunch.
+> **If system notifications stop showing up after an update or rebuild**, macOS may be treating it as a new app. Remove **DynamicNotch** from the Accessibility list with the **–** button, add it again, and relaunch. Releases signed with the project's certificate keep the permission across updates. Local builds don't, unless you sign them too (see [Signing](#signing-optional)).
 
-### 4. Launch at login (optional)
+### Launch at login (optional)
 
 Menu bar icon → **Launch at Login**.
 
-### 5. Add the `notch` command (optional)
+### Add the `notch` command (optional)
 
 Every CLI example below works with the full binary path. A short alias is easier:
 
@@ -85,6 +92,10 @@ The shell and Claude Code integrations below look for `~/.local/bin/notch` by de
 
 ### Updating
 
+**Downloaded:** quit Dynamic Notch, replace `/Applications/DynamicNotch.app` with the new release, and open it again (with *Open Anyway* the first time).
+
+**From source:**
+
 ```bash
 git pull
 ./build_app.sh
@@ -92,7 +103,7 @@ pkill -x DynamicNotch   # quit the running copy
 cp -R DynamicNotch.app /Applications/ && open /Applications/DynamicNotch.app
 ```
 
-Then re-grant Accessibility if needed (see step 3).
+Re-grant Accessibility if needed (see [Grant permissions](#grant-permissions)).
 
 ### Uninstalling
 
@@ -108,6 +119,27 @@ Then re-grant Accessibility if needed (see step 3).
 swift run DynamicNotch   # run directly from source without bundling
 ```
 
+### Signing (optional)
+
+Without an Apple Developer ID, builds are ad-hoc signed, so macOS asks for Accessibility again after every rebuild. A free self-signed certificate gives every build the same identity. It doesn't remove the *Open Anyway* step for downloads.
+
+```bash
+tools/create-signing-cert.sh --login    # create once, import into your login keychain
+CODESIGN_IDENTITY="Dynamic Notch Self-Signed" ./build_app.sh
+
+tools/create-signing-cert.sh --upload   # maintainers: store it as GitHub secrets so releases use it too
+```
+
+The certificate lives in `~/.dynamicnotch-signing`. Back it up: a new certificate means users re-grant permissions once.
+
+### Publishing a release
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The [Release workflow](.github/workflows/release.yml) builds a universal app, zips it with a SHA-256 checksum, and publishes it on the Releases page. Run it manually from the Actions tab to get a test build without publishing.
+
 ---
 
 ## Integrations (optional)
@@ -117,7 +149,7 @@ swift run DynamicNotch   # run directly from source without bundling
 Any command that runs longer than 3 seconds shows a live activity with a timer, then a success or failure alert when it exits. Add to `~/.zshrc`:
 
 ```bash
-source ~/Developer/macos-notification-center/scripts/dynamic-notch-zsh-hook.sh
+source /Applications/DynamicNotch.app/Contents/Resources/scripts/dynamic-notch-zsh-hook.sh
 # export NOTCH_THRESHOLD_SECONDS=5   # optional: change the 3s threshold
 ```
 
@@ -127,25 +159,25 @@ Editors, pagers, REPLs and `ssh` are skipped automatically.
 
 Shows Claude's progress in the notch in every Claude Code session on this Mac: terminal, VS Code/JetBrains extensions, and the desktop app. You'll see "Thinking…", the current step ("Editing Foo.swift", "Running: tests"), permission requests, and a finished alert. Requires `jq` (preinstalled on macOS 15+, or `brew install jq`).
 
-Merge these entries into the `hooks` object of `~/.claude/settings.json`, replacing the path with your clone location. Keep any hooks you already have; add these alongside them in the same event arrays.
+Merge these entries into the `hooks` object of `~/.claude/settings.json`. The scripts ship inside the app, so the paths work for both downloaded and source installs. Keep any hooks you already have; add these alongside them in the same event arrays.
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "/Users/YOU/Developer/macos-notification-center/scripts/claude-notch-hook.sh", "args": ["UserPromptSubmit"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "/Applications/DynamicNotch.app/Contents/Resources/scripts/claude-notch-hook.sh", "args": ["UserPromptSubmit"], "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "/Users/YOU/Developer/macos-notification-center/scripts/claude-notch-hook.sh", "args": ["PreToolUse"], "timeout": 5 }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "/Applications/DynamicNotch.app/Contents/Resources/scripts/claude-notch-hook.sh", "args": ["PreToolUse"], "timeout": 5 }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "/Users/YOU/Developer/macos-notification-center/scripts/claude-notch-hook.sh", "args": ["Notification"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "/Applications/DynamicNotch.app/Contents/Resources/scripts/claude-notch-hook.sh", "args": ["Notification"], "timeout": 5 }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "/Users/YOU/Developer/macos-notification-center/scripts/claude-notch-hook.sh", "args": ["Stop"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "/Applications/DynamicNotch.app/Contents/Resources/scripts/claude-notch-hook.sh", "args": ["Stop"], "timeout": 5 }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "/Users/YOU/Developer/macos-notification-center/scripts/claude-notch-hook.sh", "args": ["SessionEnd"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "/Applications/DynamicNotch.app/Contents/Resources/scripts/claude-notch-hook.sh", "args": ["SessionEnd"], "timeout": 5 }] }
     ]
   }
 }

@@ -7,3 +7,5 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 /DynamicNotch.app
+/DynamicNotch-*.zip
+/DynamicNotch-*.zip.sha256

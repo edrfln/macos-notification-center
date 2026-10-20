@@ -1,0 +1,99 @@
+name: Release
+
+# Push a version tag (git tag v1.0.0 && git push origin v1.0.0) to build and publish a release.
+# Run manually from the Actions tab to build a test artifact without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Require macOS 26+ SDK
+        run: |
+          sdk="$(xcrun --show-sdk-version)"
+          echo "macOS SDK $sdk, $(swift --version 2>&1 | head -1)"
+          if [[ "${sdk%%.*}" -lt 26 ]]; then
+            echo "::error::The on-device lyric translation needs the macOS 26 SDK or newer (found $sdk)."
+            exit 1
+          fi
+
+      - name: Import self-signed certificate (optional)
+        if: env.SIGNING_CERT_P12 != ''
+        env:
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$SIGNING_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          rm -f "$RUNNER_TEMP/signing.p12"
+          echo "CODESIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "CODESIGN_IDENTITY=${SIGNING_IDENTITY:-Dynamic Notch Self-Signed}" >> "$GITHUB_ENV"
+
+      - name: Build universal app
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            export VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          UNIVERSAL=1 ./build_app.sh
+          codesign -dr - DynamicNotch.app
+
+      - name: Package
+        id: package
+        run: |
+          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' DynamicNotch.app/Contents/Info.plist)"
+          zip="DynamicNotch-$version.zip"
+          ditto -c -k --keepParent DynamicNotch.app "$zip"
+          shasum -a 256 "$zip" > "$zip.sha256"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          cat "$zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DynamicNotch
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ### Install
+
+          1. Download **${{ steps.package.outputs.zip }}**, unzip it, and move **DynamicNotch.app** to **Applications**.
+          2. Open it. macOS will say it can't verify the app (it isn't notarized by Apple). Click **Done**.
+          3. Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to DynamicNotch.
+
+          Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/DynamicNotch.app`
+
+          Requires macOS 14 or later (Apple Silicon or Intel). See the README for permissions and integrations.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.package.outputs.zip }}" "${{ steps.package.outputs.zip }}.sha256" \
+            --title "Dynamic Notch $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes
